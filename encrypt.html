@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Telegram bot — encrypt / decrypt</title>
+<style>
+  body { font-family: sans-serif; max-width: 640px; margin: 2em auto; padding: 0 1em; }
+  textarea, input { width: 100%; box-sizing: border-box; margin: 0.3em 0 1em; }
+  textarea { height: 6em; }
+  button { padding: 0.5em 1em; margin-right: 0.5em; }
+  .out { background: #f4f4f4; padding: 0.7em; word-break: break-all; white-space: pre-wrap; }
+  .note { color: #555; font-size: 0.9em; }
+</style>
+</head>
+<body>
+<h1>Telegram bot — encrypt / decrypt</h1>
+<p class="note">Offline page, no libraries, no network. Same format as
+<code>telegram_bot.py</code> / <code>encrypt.py</code>:
+<code>enc:v1:&lt;base64(salt 16 bytes | iv 12 bytes | AES-GCM ciphertext+tag)&gt;</code>,
+key = PBKDF2-HMAC-SHA256(passphrase, salt, 100,000 iterations, 32 bytes).</p>
+<p class="note">WebCrypto needs a secure context: open this file directly
+(<code>file://</code>) or serve it with <code>python -m http.server</code>
+and open <code>http://localhost:8000/encrypt.html</code>.</p>
+<p class="note">Verified 2026-11-17 with node v24: a string encrypted by the
+Python side decrypts here, and a string encrypted here decrypts on the
+Python side (see <code>test_telegram_bot.py</code>).</p>
+
+<label>Passphrase (same as <code>TELEGRAM_SECRET</code> on the bot):</label>
+<input type="password" id="secret" autocomplete="off">
+
+<label>Prompt to encrypt (paste the result into Telegram):</label>
+<textarea id="plain"></textarea>
+<button id="encryptBtn">Encrypt</button>
+<div class="out" id="encOut"></div>
+
+<label>Reply to decrypt (paste an <code>enc:...</code> message from the bot):</label>
+<textarea id="enc"></textarea>
+<button id="decryptBtn">Decrypt</button>
+<div class="out" id="plainOut"></div>
+
+<script>
+// Same format as telegram_bot.py / encrypt.py:
+//   enc:v1:<base64(salt 16 bytes | iv 12 bytes | AES-GCM ciphertext+tag)>
+//   key = PBKDF2-HMAC-SHA256(passphrase, salt, 100_000 iterations, 32 bytes)
+const ITERATIONS = 100000;
+
+function b64encode(bytes) {
+  let s = "";
+  for (const b of bytes) s += String.fromCharCode(b);
+  return btoa(s);
+}
+function b64decode(b64) {
+  const s = atob(b64);
+  const bytes = new Uint8Array(s.length);
+  for (let i = 0; i < s.length; i++) bytes[i] = s.charCodeAt(i);
+  return bytes;
+}
+async function deriveKey(passphrase, salt) {
+  const material = await crypto.subtle.importKey(
+    "raw", new TextEncoder().encode(passphrase), "PBKDF2", false, ["deriveKey"]);
+  return crypto.subtle.deriveKey(
+    { name: "PBKDF2", salt, iterations: ITERATIONS, hash: "SHA-256" },
+    material, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+}
+async function encryptText(plaintext, passphrase) {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const key = await deriveKey(passphrase, salt);
+  const ct = new Uint8Array(await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv }, key, new TextEncoder().encode(plaintext)));
+  const all = new Uint8Array(16 + 12 + ct.length);
+  all.set(salt, 0); all.set(iv, 16); all.set(ct, 28);
+  return "enc:v1:" + b64encode(all);
+}
+async function decryptText(enc, passphrase) {
+  if (!enc.startsWith("enc:")) throw new Error("not an enc: message");
+  const rest = enc.slice(4);
+  const sep = rest.indexOf(":");
+  if (sep < 0 || rest.slice(0, sep) !== "v1") throw new Error("unsupported enc: version");
+  const raw = b64decode(rest.slice(sep + 1));
+  if (raw.length < 29) throw new Error("enc: message too short");
+  const salt = raw.slice(0, 16), iv = raw.slice(16, 28), ct = raw.slice(28);
+  const key = await deriveKey(passphrase, salt);
+  const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, ct);
+  return new TextDecoder().decode(pt);
+}
+document.getElementById("encryptBtn").addEventListener("click", async () => {
+  const out = document.getElementById("encOut");
+  try {
+    out.textContent = await encryptText(
+      document.getElementById("plain").value,
+      document.getElementById("secret").value);
+  } catch (e) { out.textContent = "Error: " + e.message; }
+});
+document.getElementById("decryptBtn").addEventListener("click", async () => {
+  const out = document.getElementById("plainOut");
+  try {
+    out.textContent = await decryptText(
+      document.getElementById("enc").value.trim(),
+      document.getElementById("secret").value);
+  } catch (e) { out.textContent = "Error: " + e.message; }
+});
+</script>
+</body>
+</html>

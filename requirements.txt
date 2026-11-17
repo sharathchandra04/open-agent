@@ -1,1 +1,2 @@
 litellm
+cryptography  # only needed for the optional Telegram enc: layer (telegram_bot.py / encrypt.py)
