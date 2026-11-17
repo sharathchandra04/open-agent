@@ -19,10 +19,13 @@ Restart (only for a change to agent.py itself):
   request_restart() saves state.json (messages + task) and exits 42.
   The supervisor relaunches agent.py, which loads state.json and resumes.
 
-Grok: same thin LiteLLM client as the resume builder
-(model xai/grok-4, key from env XAI_API_KEY). No key -> --demo runs
-the self-write cycle offline with a canned new tool, so the loop can
-be tried without spending a call.
+Grok: same thin LiteLLM client as the resume builder, but the
+default is now Groq's FREE model (groq/openai/gpt-oss-120b, key
+from env GROQ_API_KEY, no card needed at console.groq.com).
+xai/grok-4 is still available as a fallback when XAI_API_KEY is
+set and no GROQ_API_KEY is set, or via env MODEL. No key ->
+--demo runs the self-write cycle offline with a canned new
+tool, so the loop can be tried without spending a call.
 """
 import argparse
 import importlib
@@ -41,7 +44,11 @@ import tools as tool_registry  # noqa: E402
 
 RESTART_CODE = 42
 STATE_FILE = "state.json"
-MODEL = "xai/grok-4"
+# Free default: Groq gpt-oss-120b, 30 req/min, 1,000 req/day,
+# 8,000 tokens/min, 200,000 tokens/day on the free tier.
+GROQ_MODEL = "groq/openai/gpt-oss-120b"
+GROK_MODEL = "xai/grok-4"
+MODEL = GROQ_MODEL
 MAX_TURNS = 10
 MAX_TEST_TRIES = 3
 
@@ -175,22 +182,54 @@ def self_write_cycle(name, code, smoke_args=""):
     return False, "unreachable"
 
 
-# ---------------------------------------------------------------- Grok
-def call_grok(messages, registry):
-    """One Grok call with the current tool list (function calling)."""
+# ---------------------------------------------------------------- model
+def resolve_model():
+    """Pick the model + key. Groq free first, Grok as fallback.
+
+    Priority: env MODEL (explicit) > GROQ_API_KEY > XAI_API_KEY.
+    Returns (model, api_key). Raises if no key is set at all.
+    """
+    override = os.environ.get("MODEL")
+    if override:
+        if override.startswith("groq/"):
+            key = os.environ.get("GROQ_API_KEY")
+        elif override.startswith("xai/"):
+            key = os.environ.get("XAI_API_KEY")
+        else:
+            key = os.environ.get("GROQ_API_KEY") or os.environ.get("XAI_API_KEY")
+        if not key:
+            raise RuntimeError(f"MODEL={override} is set but its API key is not set")
+        return override, key
+    if os.environ.get("GROQ_API_KEY"):
+        return GROQ_MODEL, os.environ["GROQ_API_KEY"]
+    if os.environ.get("XAI_API_KEY"):
+        return GROK_MODEL, os.environ["XAI_API_KEY"]
+    raise RuntimeError(
+        "No API key set: set GROQ_API_KEY (free, no card needed — "
+        "sign up at console.groq.com and create a key) "
+        "or XAI_API_KEY for Grok"
+    )
+
+
+# ---------------------------------------------------------------- Groq / Grok
+def call_model(messages, registry):
+    """One model call with the current tool list (function calling)."""
     import litellm
 
-    api_key = os.environ.get("XAI_API_KEY")
-    if not api_key:
-        raise RuntimeError("XAI_API_KEY is not set")
+    model, api_key = resolve_model()
     resp = litellm.completion(
-        model=MODEL,
+        model=model,
         messages=messages,
         tools=[{"type": "function", "function": s} for s, _ in registry.values()],
         api_key=api_key,
         temperature=0.7,
     )
     return resp.choices[0].message
+
+
+# Backwards-compatible name; the old Grok-only entry point.
+def call_grok(messages, registry):
+    return call_model(messages, registry)
 
 
 # ---------------------------------------------------------------- event loop
@@ -240,7 +279,7 @@ def run_loop(task, demo=False):
         return 0 if ok else 1
 
     for turn in range(MAX_TURNS):
-        msg = call_grok(messages, registry)
+        msg = call_model(messages, registry)
         messages.append({"role": "assistant", "content": msg.content or "",
                          "tool_calls": getattr(msg, "tool_calls", None)})
         if not getattr(msg, "tool_calls", None):
@@ -279,7 +318,7 @@ def run_loop(task, demo=False):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Small self-improving agent (Grok + PTY).")
+    parser = argparse.ArgumentParser(description="Small self-improving agent (Groq free + PTY).")
     parser.add_argument("--task", default="Say hello with the hello tool.")
     parser.add_argument("--demo", action="store_true",
                         help="Run the self-write/test/hot-load cycle offline, no Grok call.")

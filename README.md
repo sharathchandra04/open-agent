@@ -1,9 +1,14 @@
 # Self-improving Python agent — minimal skeleton
 
-Small event agentic loop: Grok + a PTY terminal, able to write tools
+Small event agentic loop: Groq free model + a PTY terminal, able to write tools
 for itself, test them, and restart — built from the design discussed
 on 2026-11-16 (supervisor / agent / tools, hot-load tools, restart
 only for core changes).
+
+Default model is Groq's free `openai/gpt-oss-120b` (30 req/min,
+1,000 req/day, 8,000 tokens/min, 200,000 tokens/day, no card).
+Grok (`xai/grok-4`) is still a fallback if `XAI_API_KEY` is set
+and no Groq key is set, or set `MODEL=xai/grok-4` explicitly.
 
 ## Files
 
@@ -27,10 +32,14 @@ only for core changes).
 
 ```bash
 pip install -r requirements.txt   # litellm only (PTY shell is stdlib pty)
-export XAI_API_KEY="..."          # xAI key; model is xai/grok-4, same thin
-                                  # LiteLLM client as the resume builder
+export GROQ_API_KEY="..."         # free key, no card: sign up at
+                                  # console.groq.com and create a key
 python supervisor.py --task "Say hello with the hello tool."
 ```
+
+To use Grok instead: `export XAI_API_KEY="..."` (and no Groq key),
+or `MODEL=xai/grok-4 python supervisor.py --task "..."`.
+To pick another free Groq model: `MODEL=groq/openai/gpt-oss-20b ...`
 
 Try the loop with no key and no Grok call:
 

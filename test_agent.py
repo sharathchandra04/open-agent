@@ -83,6 +83,31 @@ def test_supervisor_relaunches_on_42_then_stops():
         assert open(os.path.join(tmp, "count.txt")).read() == "2"
 
 
+def test_model_selection_prefers_groq_free():
+    old = {k: os.environ.get(k) for k in ("MODEL", "GROQ_API_KEY", "XAI_API_KEY")}
+    try:
+        os.environ.pop("MODEL", None)
+        os.environ["GROQ_API_KEY"] = "test-groq"
+        os.environ["XAI_API_KEY"] = "test-xai"
+        model, key = agent.resolve_model()
+        assert model == "groq/openai/gpt-oss-120b" and key == "test-groq"
+        os.environ.pop("GROQ_API_KEY", None)
+        model, key = agent.resolve_model()
+        assert model == "xai/grok-4" and key == "test-xai"
+        os.environ.pop("XAI_API_KEY", None)
+        try:
+            agent.resolve_model()
+            raise AssertionError("expected RuntimeError with no key")
+        except RuntimeError as exc:
+            assert "GROQ_API_KEY" in str(exc)
+    finally:
+        for k, v in old.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
 def test_demo_runs_offline():
     proc = subprocess.run([sys.executable, "agent.py", "--demo"],
                           cwd=HERE, capture_output=True, text=True, timeout=60)
