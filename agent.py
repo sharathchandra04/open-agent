@@ -132,9 +132,19 @@ class Terminal:
             lines = lines[1:]
         return "\n".join(lines).strip()
 
-    def run(self, cmd):
-        """Run one command in the persistent shell; return its output."""
-        return self._run(cmd)
+    def run(self, command=None, cmd=None, *args, **kwargs):
+        """Run one command in the persistent shell; return its output.
+
+        Accepts the command positionally, as `command=` (the name in
+        the run_shell tool schema) or as `cmd=` (the alias the model
+        sometimes uses). The old positional `cmd` name still works.
+        """
+        text = command or cmd or kwargs.get("command") or kwargs.get("cmd")
+        if text is None and args:
+            text = args[0]
+        if text is None:
+            raise TypeError("Terminal.run() needs a command (command= or cmd=)")
+        return self._run(text)
 
     def close(self):
         try:
@@ -257,6 +267,42 @@ def call_grok(messages, registry):
     return call_model(messages, registry)
 
 
+# ---------------------------------------------------------------- run_shell tool
+RUN_SHELL_SCHEMA = {
+    "name": "run_shell",
+    "description": "Run a command in the persistent PTY bash shell. "
+                   "Argument name is 'command'; 'cmd' is an alias.",
+    "parameters": {"type": "object",
+                   "properties": {
+                       "command": {"type": "string",
+                                   "description": "Shell command to run, e.g. 'ls -R'"},
+                       "cmd": {"type": "string",
+                               "description": "Alias for 'command' — use one, not both"},
+                   },
+                   "required": []},
+}
+
+
+def make_run_shell(terminal):
+    """Build the run_shell tool function for a Terminal.
+
+    Accepts both 'command' (the schema name) and 'cmd' (the alias
+    gpt-oss-120b sometimes sends). Before this fix, the registry
+    held Terminal.run directly, whose parameter was named `cmd`,
+    so a model call with {"command": "..."} raised
+    "Terminal.run() got an unexpected keyword argument 'command'",
+    and a call with {"cmd": "..."} was rejected by Groq because
+    the schema required 'command' — a crash either way.
+    """
+    def run_shell(command=None, cmd=None, **kwargs):
+        text = command or cmd or kwargs.get("command") or kwargs.get("cmd")
+        if not text:
+            raise ValueError("run_shell needs a 'command' (alias 'cmd')")
+        return terminal.run(text)
+
+    return run_shell
+
+
 # ---------------------------------------------------------------- event loop
 def run_loop(task, demo=False):
     state = load_state()
@@ -272,19 +318,15 @@ def run_loop(task, demo=False):
                      "content": "You are a small coding agent. Use the tools "
                                 "you have. If you need a capability you lack, "
                                 "write it as a new tool in tools/, test it, "
-                                "then use it. Never edit agent.py or supervisor.py."},
+                                "then use it. Never edit agent.py or supervisor.py. "
+                                "For run_shell, the argument is named 'command' "
+                                "(alias 'cmd'): call it as "
+                                "run_shell(command=\"ls -R\")."},
                     {"role": "user", "content": task}]
 
     registry = tool_registry.discover_tools()
     terminal = Terminal()
-    registry["run_shell"] = (
-        {"name": "run_shell",
-         "description": "Run a command in the persistent PTY bash shell.",
-         "parameters": {"type": "object",
-                        "properties": {"command": {"type": "string"}},
-                        "required": ["command"]}},
-        terminal.run,
-    )
+    registry["run_shell"] = (RUN_SHELL_SCHEMA, make_run_shell(terminal))
 
     if demo:
         # Offline demo of the self-write cycle, no Grok call:
@@ -303,8 +345,28 @@ def run_loop(task, demo=False):
         terminal.close()
         return 0 if ok else 1
 
+    model_errors = 0
     for turn in range(MAX_TURNS):
-        msg = call_model(messages, registry)
+        try:
+            msg = call_model(messages, registry)
+        except Exception as exc:  # noqa: BLE001 - model error, not a crash
+            # A BadRequestError here used to crash the agent with a
+            # traceback (e.g. Groq rejecting a tool call whose argument
+            # name did not match the schema), and the supervisor then
+            # retried the same failing run twice. Instead, tell the
+            # model what went wrong and retry; give up cleanly after 3.
+            model_errors += 1
+            print(f"agent: model call failed: {exc}")
+            if model_errors >= 3:
+                print("agent: giving up after 3 failed model calls")
+                terminal.close()
+                return 1
+            messages.append({"role": "user",
+                             "content": f"The last model call failed with: {exc}. "
+                                        "Try again, using exactly the argument names "
+                                        "in the tool schemas. For run_shell, use "
+                                        "'command' (or its alias 'cmd')."})
+            continue
         messages.append({"role": "assistant", "content": msg.content or "",
                          "tool_calls": getattr(msg, "tool_calls", None)})
         if not getattr(msg, "tool_calls", None):

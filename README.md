@@ -19,7 +19,7 @@ and no Groq key is set, or set `MODEL=xai/grok-4` explicitly.
 | `tools/__init__.py` | Discovers one file per tool; `hot_load()` imports a tested tool. |
 | `tools/write_file.py` | Only way the agent writes code. Refuses anything outside `tools/`, and refuses `agent.py` / `supervisor.py`. |
 | `tools/hello.py` | Example tool — the shape every tool follows (`TOOL` schema + `run()`). |
-| `test_agent.py` | 9 tests, no Grok key, no network. |
+| `test_agent.py` | 12 tests, no Grok key, no network. |
 | `run_prompts.py` | Runs prompts from a text file, one per line, in serial order, each as a fresh `supervisor.py --task` run. Logs to `runs/<timestamp>/prompt-NN.log` + `summary.txt`. |
 | `test_run_prompts.py` | 4 tests for the prompts-file runner, no key, no network. |
 | `prompts.txt` | Example prompts file — one prompt per line. Edit it with your own prompts. |
@@ -102,7 +102,7 @@ python supervisor.py --restart-demo  # relaunches, resumes, then finishes
 Tests:
 
 ```bash
-python test_agent.py   # 9/9, no key, no network
+python test_agent.py   # 12/12, no key, no network
 python test_run_prompts.py   # 4/4, no key, no network
 python test_telegram_bot.py   # Telegram bot tests, no network (API is faked)
 ```

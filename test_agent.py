@@ -59,6 +59,100 @@ def test_terminal_remembers_state():
         term.close()
 
 
+def test_run_shell_accepts_command_and_cmd():
+    # Regression: live run 2026-11-21, prompts 2-5 failed with
+    # "Terminal.run() got an unexpected keyword argument 'command'"
+    # (model sent {"command": "ls -R"}) and then Groq rejected
+    # {"cmd": "ls -R"} because the schema required 'command'.
+    # Both names must now work, via the wrapper and via Terminal.run.
+    term = agent.Terminal()
+    try:
+        assert "hello-cmd" in term.run(command="echo hello-cmd")
+        assert "hello-cmd" in term.run(cmd="echo hello-cmd")
+        assert "hello-cmd" in term.run("echo hello-cmd")
+        fn = agent.make_run_shell(term)
+        assert "hello-cmd" in fn(command="echo hello-cmd")
+        assert "hello-cmd" in fn(cmd="echo hello-cmd")
+        # The schema must list both names and require neither, so
+        # Groq validates either argument name instead of 400ing.
+        props = agent.RUN_SHELL_SCHEMA["parameters"]["properties"]
+        assert "command" in props and "cmd" in props
+        assert agent.RUN_SHELL_SCHEMA["parameters"]["required"] == []
+    finally:
+        term.close()
+
+
+def test_model_tool_call_with_cmd_arg_runs_shell():
+    # End-to-end version of the live failure: the model sends
+    # run_shell with {"cmd": "ls -R"} (not "command"). run_loop
+    # must run it, not raise TypeError, and finish with the answer.
+    import types
+
+    class _Fn:
+        def __init__(self, name, arguments):
+            self.name, self.arguments = name, arguments
+
+    class _Call:
+        def __init__(self, name, arguments):
+            self.function = _Fn(name, arguments)
+            self.id = "call-1"
+
+    class _Msg:
+        def __init__(self, content=None, tool_calls=None):
+            self.content, self.tool_calls = content, tool_calls
+
+    calls = {"n": 0}
+
+    def fake_call(messages, registry):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return _Msg(tool_calls=[_Call("run_shell", '{"cmd": "echo hello-cmd"}')])
+        return _Msg(content="done")
+
+    old_call = agent.call_model
+    agent.call_model = fake_call
+    try:
+        import io
+        from contextlib import redirect_stdout
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            code = agent.run_loop("run a shell command")
+        assert code == 0, buf.getvalue()
+        assert "hello-cmd" in buf.getvalue(), buf.getvalue()
+    finally:
+        agent.call_model = old_call
+
+
+def test_model_call_failure_does_not_crash():
+    # Regression: a BadRequestError from call_model used to crash
+    # the agent with a traceback; the supervisor then retried the
+    # same failing run twice. Now run_loop retries with a correction
+    # and gives up cleanly (exit 1, no traceback) after 3 failures.
+    import types
+
+    def failing_call(messages, registry):
+        raise RuntimeError("400 Bad Request: tool call validation failed")
+
+    real_terminal = agent.Terminal
+
+    def fake_terminal(*args, **kwargs):
+        return real_terminal()
+
+    old_call, old_terminal = agent.call_model, agent.Terminal
+    agent.call_model, agent.Terminal = failing_call, fake_terminal
+    try:
+        import io
+        from contextlib import redirect_stdout
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            code = agent.run_loop("say hello")
+        assert code == 1, buf.getvalue()
+        assert "Traceback" not in buf.getvalue()
+        assert "giving up after 3 failed model calls" in buf.getvalue()
+    finally:
+        agent.call_model, agent.Terminal = old_call, old_terminal
+
+
 def test_restart_saves_and_resumes_state():
     agent.save_state([{"role": "user", "content": "t"}], "demo task")
     state = agent.load_state()
