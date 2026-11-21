@@ -40,6 +40,31 @@ import pty
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+
+def _load_dotenv():
+    """Load KEY=VALUE lines from .env next to agent.py, if present.
+
+    No extra dependency. Existing environment wins over .env, so a
+    key exported in the shell is never overwritten by the file.
+    The setup script writes GROQ_API_KEY here; never commit .env.
+    """
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    if not os.path.exists(path):
+        return
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+    except OSError:
+        pass
+
+
+_load_dotenv()
+
 import tools as tool_registry  # noqa: E402
 
 RESTART_CODE = 42

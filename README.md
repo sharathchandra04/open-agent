@@ -20,6 +20,10 @@ and no Groq key is set, or set `MODEL=xai/grok-4` explicitly.
 | `tools/write_file.py` | Only way the agent writes code. Refuses anything outside `tools/`, and refuses `agent.py` / `supervisor.py`. |
 | `tools/hello.py` | Example tool — the shape every tool follows (`TOOL` schema + `run()`). |
 | `test_agent.py` | 9 tests, no Grok key, no network. |
+| `run_prompts.py` | Runs prompts from a text file, one per line, in serial order, each as a fresh `supervisor.py --task` run. Logs to `runs/<timestamp>/prompt-NN.log` + `summary.txt`. |
+| `test_run_prompts.py` | 4 tests for the prompts-file runner, no key, no network. |
+| `prompts.txt` | Example prompts file — one prompt per line. Edit it with your own prompts. |
+| `setup_open_agent.sh` | One-command setup for WSL Ubuntu: clones/updates the repo, makes `.venv`, installs deps, saves your Groq key to git-ignored `.env`, runs tests + offline demo. |
 
 ## How the self-write cycle works
 
@@ -27,6 +31,21 @@ and no Groq key is set, or set `MODEL=xai/grok-4` explicitly.
 2. `agent.test_new_tool()` checks it in a **fresh process**: `py_compile`, then import in a new `python -c`. Max 3 tries; failures go back to Grok as an observation to fix.
 3. Only on a pass, `hot_load()` imports it into this process and adds it to the registry. Grok can use it on the next turn. **No restart for a new tool.**
 4. For a change to `agent.py` itself: `request_restart()` saves `state.json` (messages + task) and exits 42; the supervisor relaunches and `agent.py` resumes from `state.json`. Always `git commit` before a test run, so a bad self-edit is one `git checkout` away.
+
+## Run it on your laptop (WSL Ubuntu) — one command
+
+Download `setup_open_agent.sh`, then in WSL Ubuntu:
+
+```bash
+bash setup_open_agent.sh
+```
+
+That clones/updates the repo to `~/open-agent`, creates `.venv`,
+installs dependencies, asks once for your free Groq key (saved to
+git-ignored `.env`, never to GitHub), runs the tests and the offline
+demo, and prints the start commands. You need WSL Ubuntu installed
+first (`wsl --install Ubuntu` on Windows) — the script itself does
+not install WSL.
 
 ## Run it
 
@@ -36,6 +55,29 @@ export GROQ_API_KEY="..."         # free key, no card: sign up at
                                   # console.groq.com and create a key
 python supervisor.py --task "Say hello with the hello tool."
 ```
+
+Or put the key in `.env` next to `agent.py` instead — `agent.py`
+loads it automatically, and `.env` is git-ignored:
+
+```bash
+echo 'GROQ_API_KEY=your-key-here' > .env
+```
+
+### Many prompts from a text file, in serial order
+
+```bash
+# Edit prompts.txt — one prompt per line, blank lines and # lines skipped.
+# 10 prompts = 10 lines, they run one after another, in file order.
+python run_prompts.py prompts.txt
+python run_prompts.py prompts.txt --timeout 600 --stop-on-error
+```
+
+Each prompt runs as a fresh `supervisor.py --task "<prompt>"` (so a
+restart inside one prompt is handled by the supervisor), a stale
+`state.json` is removed before each prompt, and output goes live to
+the terminal and to `runs/<timestamp>/prompt-NN.log`, with a
+`summary.txt` at the end. If one prompt fails, the rest still run
+unless you pass `--stop-on-error`.
 
 To use Grok instead: `export XAI_API_KEY="..."` (and no Groq key),
 or `MODEL=xai/grok-4 python supervisor.py --task "..."`.
@@ -60,7 +102,8 @@ python supervisor.py --restart-demo  # relaunches, resumes, then finishes
 Tests:
 
 ```bash
-python test_agent.py   # 8/8, no key, no network
+python test_agent.py   # 9/9, no key, no network
+python test_run_prompts.py   # 4/4, no key, no network
 python test_telegram_bot.py   # Telegram bot tests, no network (API is faked)
 ```
 

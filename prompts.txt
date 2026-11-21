@@ -1,0 +1,13 @@
+# prompts.txt — one prompt per line, run in order by run_prompts.py
+# Lines starting with # and blank lines are skipped. Edit this file
+# with your own prompts, then run:  python run_prompts.py prompts.txt
+Say hello with the hello tool.
+Read the file README.md and say in one sentence what this agent does.
+List the files in tools/ and say what each tool does.
+Check the cybersecurity progress in ~/workspace and report the next two labs to do, and the two after those.
+Write a new tool in tools/ that adds two numbers, test it, and use it to add 2 and 3.
+Say what model you are using and whether GROQ_API_KEY is set, without printing the key.
+Run `pwd` in the shell and say where you are running.
+Run `python --version` in the shell and report the version.
+List the git status of this folder in one sentence, if it is a git repo.
+Summarise what you did in the previous prompts in 3 bullet points.
